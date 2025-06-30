@@ -1,0 +1,12 @@
+torch
+torchvision
+git+https://github.com/mlfoundations/open_clip.git@main#egg=open-clip-torch
+ftfy
+regex
+opencv-python
+pillow
+qdrant-client
+python-dotenv
+numpy
+tqdm
+moviepy
