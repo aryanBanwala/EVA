@@ -1,7 +1,16 @@
-import os
-import shutil
+import warnings
+
+# ignore only the CLIP/video‐deprecation warning from torchvision
+warnings.filterwarnings(
+    "ignore",
+    r".*video decoding and encoding capabilities of torchvision are deprecated.*",
+    category=UserWarning,
+    module=r"torchvision\.io\._video_deprecation_warning"
+)
+
 import torch
-from PIL import Image
+import torch.nn.functional as F
+from torchvision.io import read_video
 
 from models.clip_loader import load_openclip
 from utils.video_utils     import extract_frames
@@ -32,44 +41,32 @@ def get_video_embedding(
     max_frames: int      = None,
     device: str          = 'cpu'
 ) -> torch.Tensor:
-    """
-    1) Samples `frame_per_second` frames per second (up to max_frames),
-    2) Encodes each via OpenCLIP,
-    3) Mean‐pools to a single 512‐d vector,
-    4) Cleans up temporary frames dir.
-    """
-    # print(f"🚀 Starting video embedding for: {video_path}")
-    model, preprocess = get_cached_model(device)
+    # 1) Load video frames into a [T,H,W,C] uint8 tensor
+    video, _, info = read_video(video_path, pts_unit="sec")
+    fps = info["video_fps"]
+    step = max(1, int(fps / frame_per_second))
+    frames = video[::step]
+    if max_frames:
+        frames = frames[:max_frames]
 
-    # 1) fps‐based frame extraction
-    frame_paths = extract_frames(
-        video_path,
-        fps=frame_per_second,
-        max_frames=max_frames
-    )
-    # print(f"🖼️ Total sampled frames: {len(frame_paths)}")
+    # 2) Move into GPU, reorder dims to [T,C,H,W], normalize to [0,1]
+    frames = frames.to(device=device).permute(0,3,1,2).float() / 255.0
 
-    # 2) encode each frame
-    embeddings = []
-    for idx, frame_path in enumerate(frame_paths, start=1):
-        # print(f"➡️ Frame {idx}/{len(frame_paths)}: {frame_path}")
-        # Load image from path
-        image = Image.open(frame_path).convert("RGB")
-        img_tensor = preprocess(image).unsqueeze(0).to(device)
-        with torch.no_grad():
-            feat = model.encode_image(img_tensor)      # returns (1,512) tensor
-        embeddings.append(feat.squeeze(0))             # now (512,)
+    # 3) Resize all frames at once to 224×224
+    frames = F.interpolate(frames, size=(224,224), mode="bilinear", align_corners=False)
 
-    if not embeddings:
-        raise ValueError("❌ No frames extracted.")
+    # 4) Normalize with CLIP’s mean/std (broadcasted)
+    mean = torch.tensor([0.48145466, 0.4578275,  0.40821073], device=device).view(1,3,1,1)
+    std  = torch.tensor([0.26862954, 0.26130258, 0.27577711], device=device).view(1,3,1,1)
+    frames = (frames - mean) / std
 
-    # 3) cleanup temporary frames
-    frames_dir = os.path.join("assets", "frames")
-    if os.path.isdir(frames_dir):
-        shutil.rmtree(frames_dir)
-        # print(f"🗑️ Removed temporary frames directory: {frames_dir}")
+    # 5) One batched forward pass
+    model, _ = get_cached_model(device)
+    with torch.no_grad():
+        feats = model.encode_image(frames)  # shape: [T, 512]
 
-    # 4) mean‐pool to get final vector
-    # print("🧮 Averaging embeddings …")
-    video_embedding = torch.stack(embeddings).mean(0)  # shape: (512,)
-    return video_embedding
+    if feats.numel() == 0:
+        raise ValueError(f"No frames to embed in {video_path}")
+
+    # 6) Mean-pool over time → [512]
+    return feats.mean(dim=0).cpu()
