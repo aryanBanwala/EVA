@@ -13,6 +13,8 @@ load_dotenv(override=True)
 try:
     num = os.environ["NUM"]
     device = os.environ["DEVICE"]
+    fps = os.environ["FRAME_PER_SECOND"]
+    frame_limit = os.environ["FRAME_LIMIT"]
     BASE_VIDEO_ENPOINT = os.environ["BASE_VIDEO_ENPOINT"]
 except KeyError as e:
     print(f"❌ Missing environment variable: {e}")
@@ -93,8 +95,8 @@ if __name__ == "__main__":
         json_path="assets/" + json_name + ".json",
         base_url=BASE_VIDEO_ENPOINT,
         collection_name=json_name,
-        frame_per_second=3,
-        max_frames=300,
+        frame_per_second=int(fps),
+        max_frames=int(frame_limit),
         device=device
     )
     
