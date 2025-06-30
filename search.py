@@ -5,7 +5,7 @@ from embeddings.text_embed import get_text_embedding
 from db.qdrant import search_similar_vectors
 
 
-load_dotenv()
+load_dotenv(override=True)
 try:
     k = int(os.environ["K"])
     num = os.environ["NUM"]

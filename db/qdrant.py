@@ -18,6 +18,9 @@ qdrant_client = QdrantClient(
     api_key=QDRANT_API_KEY,
 )
 
+# ── Global buffers by collection ───────────────────────────────
+_POINTS_BUFFER: dict[str, list[PointStruct]] = {}
+
 def ensure_collection(collection_name, vector_dim=768):
     """Create collection if it doesn't exist"""
     collections = qdrant_client.get_collections().collections
@@ -54,3 +57,30 @@ def search_similar_vectors(collection_name, query_vector, top_k=5):
         limit=top_k
     )
     return hits
+
+def buffer_point(collection_name: str, vector: list[float], payload: dict):
+    """Create a PointStruct and store it in the in-memory buffer."""
+    pts = _POINTS_BUFFER.setdefault(collection_name, [])
+    point = PointStruct(
+        id=str(uuid.uuid4()),
+        vector=vector,
+        payload=payload
+    )
+    pts.append(point)
+    return point.id
+
+def flush_buffer(collection_name: str):
+    """Push all buffered points for this collection in one upsert call."""
+    pts = _POINTS_BUFFER.get(collection_name)
+    if not pts:
+        return
+
+    # ensure the collection exists (use first vector's length)
+    ensure_collection(collection_name, vector_dim=len(pts[0].vector))
+
+    qdrant_client.upsert(
+        collection_name=collection_name,
+        points=pts
+    )
+    # clear buffer after upload
+    _POINTS_BUFFER[collection_name] = []

@@ -4,12 +4,12 @@ import json
 import time
 import shutil
 from dotenv import load_dotenv
-from db.qdrant              import upload_embedding
 from embeddings.video_embed import get_video_embedding
+from db.qdrant              import buffer_point, flush_buffer
 from utils.videos_extractor import download_video, delete_video
 
 
-load_dotenv()
+load_dotenv(override=True)
 try:
     num = os.environ["NUM"]
     device = os.environ["DEVICE"]
@@ -32,11 +32,12 @@ def process_file(
         max_frames=max_frames,
         device=device
     )
-    upload_embedding(
+    buffer_point(
         collection_name=collection_name,
-        vector=embedding,
+        vector=embedding.tolist(),
         payload={"fileurl": url}
     )
+    
 
 def process_from_json(
     json_path,
@@ -99,4 +100,17 @@ if __name__ == "__main__":
     
     total_time = time.time() - start
     mins, secs = divmod(total_time, 60)
-    print(f"\n🏁 All videos processed in {int(mins)} min {int(secs)} sec.")
+    print(f"\n🎬 Video processing complete in {int(mins)} min {int(secs)} sec.")
+
+    # Start timing bulk upload
+    upload_start = time.time()
+    print(f"\n📤 Starting bulk upload to Qdrant for collection: '{json_name}'")
+    flush_buffer(json_name)
+    upload_time = time.time() - upload_start
+    upload_mins, upload_secs = divmod(upload_time, 60)
+    print(f"✅ Bulk upload complete in {int(upload_mins)} min {int(upload_secs)} sec.")
+
+    # Grand total
+    grand_total = time.time() - start
+    grand_mins, grand_secs = divmod(grand_total, 60)
+    print(f"\n🏁 Total job finished in {int(grand_mins)} min {int(grand_secs)} sec.\n")
