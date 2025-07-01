@@ -1,4 +1,5 @@
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
 import sys
 import json
 import time
@@ -8,6 +9,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from embeddings.video_embed import extract_and_preprocess_frames, embed_batch
 from db.qdrant import buffer_point, flush_buffer
 from utils.videos_extractor import download_video, delete_video
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
+
+import torch
+import gc
+
+def log_gpu_mem(tag=""):
+    gc.collect()
+    torch.cuda.empty_cache()
+    print(f"\n📊 [GPU MEM] {tag}")
+    print(f"  Allocated     : {torch.cuda.memory_allocated()   / 1024**2:.2f} MB")
+    print(f"  Reserved      : {torch.cuda.memory_reserved()    / 1024**2:.2f} MB")
+    print(f"  Max Allocated : {torch.cuda.max_memory_allocated()/ 1024**2:.2f} MB")
+    print(f"  Max Reserved  : {torch.cuda.max_memory_reserved() / 1024**2:.2f} MB\n")
+
 
 def download_and_extract(rel_path, base_url, fps, max_frames, device):
     url = f"{base_url.rstrip('/')}/{rel_path.lstrip('/')}"
@@ -59,7 +75,12 @@ def main():
 
         # one-shot embed
         embeddings = embed_batch(frames_list, device)
-
+        
+        # Log and clear GPU memory after each batch
+        log_gpu_mem(tag=f"After Batch {batch_start//batch_size + 1}")
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
+        
         # buffer to Qdrant
         for (rel, url, _), emb in zip(results, embeddings):
             print(f"✅ Embedded & buffering: {rel}")
