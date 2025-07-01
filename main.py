@@ -25,10 +25,26 @@ def log_gpu_mem(tag=""):
 
 def download_and_extract(rel_path, base_url, fps, max_frames, device):
     url = f"{base_url.rstrip('/')}/{rel_path.lstrip('/')}"
-    tmp = download_video(url)
-    frames = extract_and_preprocess_frames(tmp, fps, max_frames, device)
-    delete_video(tmp)
-    return rel_path, url, frames
+
+    try:
+        tmp = download_video(url)
+        frames = extract_and_preprocess_frames(tmp, fps, max_frames, device)
+        delete_video(tmp)
+        return rel_path, url, frames
+
+    except Exception as e:
+        print(f"💥 Failed: {rel_path}\n   ↳ {type(e).__name__}: {e}")
+
+    finally:
+        if device == "cuda":
+            torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except AttributeError:
+                pass
+
+    return None
+
 
 def main():
     load_dotenv(override=True)
@@ -64,11 +80,24 @@ def main():
 
         # download & preprocess in parallel
         with ThreadPoolExecutor(max_workers=len(batch)) as exe:
-            futures = [
-                exe.submit(download_and_extract, rel, base_url, fps, max_frames, device)
+            futures = {
+                exe.submit(download_and_extract, rel, base_url, fps, max_frames, device): rel
                 for rel in batch
-            ]
-            results = [f.result() for f in as_completed(futures)]
+            }
+
+            results = []
+            for fut, rel in futures.items():
+                try:
+                    result = fut.result(timeout=45)  # timeout per video
+                    if result is not None:
+                        results.append(result)
+                except Exception as e:
+                    print(f"💥 Skipped {rel}: {e}")
+
+        if not results:
+            print(f"⚠️  Batch [{batch_num}/{total_batches}] skipped — all videos failed.")
+            continue
+
 
         # reorder to original batch order
         results.sort(key=lambda x: batch.index(x[0]))

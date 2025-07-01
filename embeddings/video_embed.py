@@ -117,8 +117,8 @@ def embed_batch(frames_list: list[torch.Tensor], device: str) -> list[torch.Tens
     model = model.to(device).eval().half()
 
     all_frames = torch.cat(frames_list, dim=0).half().to(device)
-    with torch.cuda.amp.autocast():
-        feats = model.encode_image(all_frames)  # [sum(N), 512]
+    with torch.amp.autocast(device_type="cuda"):
+        feats = model.encode_image(all_frames)
 
     embeddings = []
     idx = 0
