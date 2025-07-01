@@ -102,6 +102,7 @@ def main():
                 for fut in futures:
                     if not fut.done():
                         fut.cancel()
+                exe.shutdown(wait=False, cancel_futures=True)
                 continue  # ← go straight to the next batch
 
         # if we get here, results contains *all* successful video extractions
