@@ -16,6 +16,7 @@ import gc
 def log_gpu_mem(tag=""):
     gc.collect()
     torch.cuda.empty_cache()
+    return
     print(f"\n📊 [GPU MEM] {tag}")
     print(f"  Allocated     : {torch.cuda.memory_allocated()   / 1024**2:.2f} MB")
     print(f"  Reserved      : {torch.cuda.memory_reserved()    / 1024**2:.2f} MB")
