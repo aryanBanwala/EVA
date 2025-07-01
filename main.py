@@ -151,6 +151,7 @@ def main():
     elapsed = time.time() - start
     m, s = divmod(elapsed, 60)
     print(f"\n🏁 All done in {int(m)}m {int(s)}s")
+    sys.exit(0)
     
 if __name__ == "__main__":
     main()
