@@ -86,19 +86,24 @@ def main():
             }
 
             results = []
-            for fut, rel in futures.items():
-                try:
-                    result = fut.result(timeout=45)  # timeout per video
-                    if result is not None:
-                        results.append(result)
-                except Exception as e:
-                    print(f"💥 Skipped {rel}: {e}")
-
+            try:
+                for fut in as_completed(futures, timeout=45):
+                    rel = futures[fut]
+                    try:
+                        res = fut.result()
+                        if res is not None:
+                            results.append(res)
+                    except Exception as e:
+                        print(f"💥 Skipped {rel}: {type(e).__name__}: {e}")
+            except TimeoutError:
+                for fut, rel in futures.items():
+                    if not fut.done():
+                        print(f"⏱️ Batch-timeout (45 s) → Skipped: {rel}")
+                        fut.cancel()
         if not results:
             print(f"⚠️  Batch [{batch_num}/{total_batches}] skipped — all videos failed.")
             continue
-
-
+                   
         # reorder to original batch order
         results.sort(key=lambda x: batch.index(x[0]))
         frames_list = [r[2] for r in results]
