@@ -4,7 +4,7 @@ import sys
 import json
 import time
 from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed , TimeoutError
 
 from embeddings.video_embed import extract_and_preprocess_frames, embed_batch
 from db.qdrant import buffer_point, flush_buffer
@@ -79,7 +79,7 @@ def main():
         print(f"🔄 Batch [{batch_num}/{total_batches}]: {len(batch)} videos")
 
         # download & preprocess in parallel
-        with ThreadPoolExecutor(max_workers=len(batch)) as exe:
+        with ThreadPoolExecutor(max_workers=max(1, len(batch))) as exe:
             futures = {
                 exe.submit(download_and_extract, rel, base_url, fps, max_frames, device): rel
                 for rel in batch
@@ -87,6 +87,7 @@ def main():
 
             results = []
             try:
+                # wait up to 45s for *all* futures
                 for fut in as_completed(futures, timeout=45):
                     rel = futures[fut]
                     try:
@@ -95,11 +96,15 @@ def main():
                             results.append(res)
                     except Exception as e:
                         print(f"💥 Skipped {rel}: {type(e).__name__}: {e}")
+
             except TimeoutError:
-                for fut, rel in futures.items():
+                print(f"⏱️ Batch-timeout (45 s) — Skipping entire batch {batch_num}/{total_batches}")
+                for fut in futures:
                     if not fut.done():
-                        print(f"⏱️ Batch-timeout (45 s) → Skipped: {rel}")
                         fut.cancel()
+                continue  # ← go straight to the next batch
+
+        # if we get here, results contains *all* successful video extractions
         if not results:
             print(f"⚠️  Batch [{batch_num}/{total_batches}] skipped — all videos failed.")
             continue
