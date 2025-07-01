@@ -81,17 +81,18 @@ def main():
             buffer_point(collection, vector=emb.tolist(), payload={"fileurl": url})
 
         # ── FREE FRAME TENSORS & FORCE GC ─────────────────────────────────
-        for _, _, frames in results:
-            del frames
-        # Drop references to these collections
-        del results, frames_list, embeddings
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-        try:
-            torch.cuda.ipc_collect()
-        except AttributeError:
-            pass
+        if device == "cuda":
+            for _, _, frames in results:
+                del frames
+            # Drop references to these collections
+            del results, frames_list, embeddings
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except AttributeError:
+                pass
 
     print(f"\n📤 Flushing buffer to Qdrant: '{collection}'")
     flush_buffer(collection)
