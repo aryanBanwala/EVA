@@ -14,11 +14,25 @@ import torch.nn.functional as F
 from fractions import Fraction
 from contextlib import suppress
 from decord import VideoReader, cpu , gpu , bridge
+from decord._ffi.base import DECORDError 
 bridge.set_bridge('torch') 
 
 from models.clip_loader import load_openclip
 
 _model_cache = {"model": None, "preprocess": None, "device": None}
+
+def _make_vr(path, want_gpu: bool = True):
+    """Create a VideoReader, falling back to CPU if GPU build is unavailable."""
+    try:
+        if want_gpu:
+            return VideoReader(path, ctx=gpu(0))
+        # explicit CPU
+        return VideoReader(path, ctx=cpu(0))
+    except DECORDError as e:
+        # GPU build missing → retry on CPU
+        if "CUDA not enabled" in str(e):
+            return VideoReader(path, ctx=cpu(0))
+        raise          
 
 def get_cached_model(device: str):
     if _model_cache["model"] is None or _model_cache["device"] != device:
@@ -62,10 +76,7 @@ def extract_and_preprocess_frames(
     """
 
     # 1. Open video (Decord chooses best backend automatically)
-    if ( device == "cpu" ):
-        vr = VideoReader(video_path, ctx=cpu(0))
-    elif ( device == "cuda" ):
-        vr = VideoReader(video_path, ctx=gpu(0))  
+    vr = _make_vr(video_path, want_gpu=device.startswith("cuda"))
     fps = vr.get_avg_fps() or 30  # fallback if header missing
     fps = _as_float_fps(fps)
 
