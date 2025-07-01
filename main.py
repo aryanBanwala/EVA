@@ -78,37 +78,43 @@ def main():
         batch = rel_paths[batch_start: batch_start + batch_size]
         print(f"🔄 Batch [{batch_num}/{total_batches}]: {len(batch)} videos")
 
-        # download & preprocess in parallel
-        with ThreadPoolExecutor(max_workers=max(1, len(batch))) as exe:
-            futures = {
-                exe.submit(download_and_extract, rel, base_url, fps, max_frames, device): rel
-                for rel in batch
-            }
+        # Manually create ThreadPoolExecutor (no with-block!)
+        exe = ThreadPoolExecutor(max_workers=max(1, len(batch)))
+        futures = {
+            exe.submit(download_and_extract, rel, base_url, fps, max_frames, device): rel
+            for rel in batch
+        }
 
-            results = []
-            try:
-                # wait up to 45s for *all* futures
-                for fut in as_completed(futures, timeout=45):
-                    rel = futures[fut]
-                    try:
-                        res = fut.result()
-                        if res is not None:
-                            results.append(res)
-                    except Exception as e:
-                        print(f"💥 Skipped {rel}: {type(e).__name__}: {e}")
+        results = []
+        batch_timed_out = False  # Flag to track if timeout happened
 
-            except TimeoutError:
-                print(f"⏱️ Batch-timeout (45 s) — Skipping entire batch {batch_num}/{total_batches}")
-                for fut in futures:
-                    if not fut.done():
-                        fut.cancel()
-                exe.shutdown(wait=False, cancel_futures=True)
-                continue  # ← go straight to the next batch
+        try:
+            # wait up to 45s for *all* futures
+            for fut in as_completed(futures, timeout=45):
+                rel = futures[fut]
+                try:
+                    res = fut.result()
+                    if res is not None:
+                        results.append(res)
+                except Exception as e:
+                    print(f"💥 Skipped {rel}: {type(e).__name__}: {e}")
 
-        # if we get here, results contains *all* successful video extractions
+        except TimeoutError:
+            print(f"⏱️ Batch-timeout (45 s) — Skipping entire batch {batch_num}/{total_batches}")
+            batch_timed_out = True  # Set timeout flag
+
+        finally:
+            # Immediately shut down executor without waiting
+            exe.shutdown(wait=False, cancel_futures=True)
+
+        if batch_timed_out:
+            continue  # Skip processing, immediately go to the next batch
+
+        # Check if there are no successful results
         if not results:
             print(f"⚠️  Batch [{batch_num}/{total_batches}] skipped — all videos failed.")
             continue
+
                    
         # reorder to original batch order
         results.sort(key=lambda x: batch.index(x[0]))
