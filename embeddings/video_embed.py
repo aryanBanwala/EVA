@@ -9,32 +9,41 @@ warnings.filterwarnings(
 )
 
 import torch
+import numpy as np
 import torch.nn.functional as F
 from fractions import Fraction
 from contextlib import suppress
-from torchvision.io import VideoReader
+from decord import VideoReader, cpu , gpu , bridge
+from decord._ffi.base import DECORDError 
+bridge.set_bridge('torch') 
 
 from models.clip_loader import load_openclip
-from utils.video_utils     import extract_frames
 
-_model_cache = {
-    "model": None,
-    "preprocess": None,
-    "device": None
-}
+_model_cache = {"model": None, "preprocess": None, "device": None}
 
-def get_cached_model(device='cpu'):
+def _make_vr(path, want_gpu: bool = True):
+    """Create a VideoReader, falling back to CPU if GPU build is unavailable."""
+    try:
+        if want_gpu:
+            return VideoReader(path, ctx=gpu(0))
+        # explicit CPU
+        return VideoReader(path, ctx=cpu(0))
+    except DECORDError as e:
+        # GPU build missing → retry on CPU
+        if "CUDA not enabled" in str(e):
+            return VideoReader(path, ctx=cpu(0))
+        raise          
+
+def get_cached_model(device: str):
     if _model_cache["model"] is None or _model_cache["device"] != device:
-        print("📦 Loading OpenCLIP once for device:", device)
+        print("📦 Loading OpenCLIP on", device)
         model, preprocess = load_openclip(
             model_name="ViT-B-32",
             ckpt="laion2b_s34b_b79k",
             device=device
         )
-        _model_cache["model"] = model
-        _model_cache["preprocess"] = preprocess
-        _model_cache["device"] = device
-        print("✅ Model cached.")
+        _model_cache.update(model=model, preprocess=preprocess, device=device)
+        print("✅ Model cached")
     return _model_cache["model"], _model_cache["preprocess"]
 
 def _as_float_fps(fps_meta):
@@ -43,11 +52,8 @@ def _as_float_fps(fps_meta):
     if isinstance(fps_meta, Fraction):
         return fps_meta.numerator / fps_meta.denominator
     if isinstance(fps_meta, (list, tuple)):
-        if len(fps_meta) == 2:
-            num, den = fps_meta
-            return float(num) / float(den or 1)
-        if len(fps_meta) == 1:
-            return float(fps_meta[0])
+        num_den = fps_meta if len(fps_meta) == 2 else (fps_meta[0], 1)
+        return float(num_den[0]) / float(num_den[1] or 1)
     return float(fps_meta)
 
 def _safe_close_vr(vr):
@@ -57,59 +63,69 @@ def _safe_close_vr(vr):
         with suppress(Exception):
             getattr(vr, attr).close()
 
-def get_video_embedding(
+def extract_and_preprocess_frames(
     video_path: str,
-    frame_per_second: int = 1,
-    max_frames: int      = 100,
-    device: str          = "cpu",
+    frame_per_second: int,
+    max_frames: int,
+    device: str,
 ) -> torch.Tensor:
-    vr = None
-    try:
-        vr = VideoReader(video_path, "video")
-        meta = vr.get_metadata().get("video", {})
-        fps  = _as_float_fps(meta.get("fps"))
+    """
+    Fast frame sampler using Decord.
+    1) Reads with zero-copy into numpy.
+    2) Converts to torch → GPU, resize, normalize.
+    """
 
-        step = max(1, int(round(fps / frame_per_second)))
+    # 1. Open video (Decord chooses best backend automatically)
+    vr = _make_vr(video_path, want_gpu=device.startswith("cuda"))
+    fps = vr.get_avg_fps() or 30  # fallback if header missing
+    fps = _as_float_fps(fps)
 
-        sampled = []
-        for idx, pkt in enumerate(vr):
-            if idx % step == 0:
-                sampled.append(pkt["data"])
-                if len(sampled) >= max_frames:
-                    break
+    # 2. Decide sampling step
+    step = max(1, int(round(fps / frame_per_second)))
 
-        if not sampled:
-            raise ValueError(f"No frames sampled from {video_path}")
+    # 3. Sample frames
+    indices = list(range(0, len(vr), step))[:max_frames]
+    if not indices:
+        raise ValueError(f"No frames sampled from {video_path}")
+    
+    batch = vr.get_batch(indices)           # shape (T, H, W, C) uint8
+    
+    if isinstance(batch, torch.Tensor):
+        tensor_batch = batch                       # already torch
+    else:
+        # Decord NDArray  ➜  numpy ➜  torch  (zero-copy if possible)
+        tensor_batch = torch.from_numpy(batch.asnumpy())
 
-        # stack into a tensor
-        frames = torch.stack(sampled)  # shape could be [T,C,H,W] or [T,H,W,C]
+    # 4. Move to GPU  &  [T,C,H,W]  &  float
+    frames = (tensor_batch.to(device)
+                          .contiguous()
+                          .permute(0, 3, 1, 2)      # CHW
+                          .float() / 255.0)
+    # 5. Resize on GPU
+    frames = F.interpolate(frames, (224, 224), mode="bilinear", align_corners=False)
 
-        # detect and reorder dims if needed:
-        if frames.ndim == 4 and frames.shape[-1] == 3:
-            # frames are [T, H, W, C] → permute to [T, C, H, W]
-            frames = frames.permute(0, 3, 1, 2)
+    # 6. CLIP normalization
+    mean = torch.tensor([0.48145466, 0.4578275, 0.40821073],
+                        device=device).view(1, 3, 1, 1)
+    std  = torch.tensor([0.26862954, 0.26130258, 0.27577711],
+                        device=device).view(1, 3, 1, 1)
+    frames = (frames - mean) / std
+    return frames  # shape [T, 3, 224, 224]
 
-        # now frames is [T, C, H, W]
-        frames = frames.to(device).float() / 255.0
+def embed_batch(frames_list: list[torch.Tensor], device: str) -> list[torch.Tensor]:
+    model, _ = get_cached_model(device)
+    model = model.to(device).eval().half()
 
-        # resize on GPU
-        frames = F.interpolate(frames, (224, 224),
-                               mode="bilinear", align_corners=False)
+    all_frames = torch.cat(frames_list, dim=0).half().to(device)
+    with torch.amp.autocast(device_type="cuda"):
+        feats = model.encode_image(all_frames)
 
-        # CLIP normalization
-        mean = torch.tensor([0.48145466, 0.4578275, 0.40821073],
-                            device=device).view(1, 3, 1, 1)
-        std  = torch.tensor([0.26862954, 0.26130258, 0.27577711],
-                            device=device).view(1, 3, 1, 1)
-        frames = (frames - mean) / std
+    embeddings = []
+    idx = 0
+    for frames in frames_list:
+        cnt = frames.shape[0]
+        chunk = feats[idx : idx + cnt]
+        embeddings.append(chunk.mean(0).cpu())
+        idx += cnt
 
-        model, _ = get_cached_model(device)
-        with torch.no_grad():
-            feats = model.encode_image(frames)  # [T, 512]
-
-        return feats.mean(0).cpu()
-
-    finally:
-        if vr is not None:
-            _safe_close_vr(vr)
-            del vr
+    return embeddings

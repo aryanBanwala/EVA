@@ -4,6 +4,7 @@ tqdm
 numpy
 regex
 torch
+decord
 pillow
 moviepy
 torchvision

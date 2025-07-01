@@ -1,118 +1,157 @@
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
 import sys
 import json
 import time
-import shutil
 from dotenv import load_dotenv
-from embeddings.video_embed import get_video_embedding
-from db.qdrant              import buffer_point, flush_buffer
+from concurrent.futures import ThreadPoolExecutor, as_completed , TimeoutError
+
+from embeddings.video_embed import extract_and_preprocess_frames, embed_batch
+from db.qdrant import buffer_point, flush_buffer
 from utils.videos_extractor import download_video, delete_video
 
+import torch
+import gc
 
-load_dotenv(override=True)
-try:
-    num = os.environ["NUM"]
-    device = os.environ["DEVICE"]
-    fps = os.environ["FRAME_PER_SECOND"]
-    frame_limit = os.environ["FRAME_LIMIT"]
-    BASE_VIDEO_ENPOINT = os.environ["BASE_VIDEO_ENPOINT"]
-except KeyError as e:
-    print(f"❌ Missing environment variable: {e}")
-    sys.exit(1)
+def log_gpu_mem(tag=""):
+    gc.collect()
+    torch.cuda.empty_cache()
+    print(f"\n📊 [GPU MEM] {tag}")
+    print(f"  Allocated     : {torch.cuda.memory_allocated()   / 1024**2:.2f} MB")
+    print(f"  Reserved      : {torch.cuda.memory_reserved()    / 1024**2:.2f} MB")
+    print(f"  Max Allocated : {torch.cuda.max_memory_allocated()/ 1024**2:.2f} MB")
+    print(f"  Max Reserved  : {torch.cuda.max_memory_reserved() / 1024**2:.2f} MB\n")
 
-def process_file(
-    video_path,
-    collection_name,
-    frame_per_second=1,
-    max_frames=30,
-    device='cpu',
-    url="default"
-):
-    embedding = get_video_embedding(
-        video_path=video_path,
-        frame_per_second=frame_per_second,
-        max_frames=max_frames,
-        device=device
-    )
-    buffer_point(
-        collection_name=collection_name,
-        vector=embedding.tolist(),
-        payload={"fileurl": url}
-    )
-    
 
-def process_from_json(
-    json_path,
-    base_url,
-    collection_name,
-    frame_per_second=1,
-    max_frames=30,
-    device='cpu'
-):
+def download_and_extract(rel_path, base_url, fps, max_frames, device):
+    url = f"{base_url.rstrip('/')}/{rel_path.lstrip('/')}"
+
+    try:
+        tmp = download_video(url)
+        frames = extract_and_preprocess_frames(tmp, fps, max_frames, device)
+        delete_video(tmp)
+        return rel_path, url, frames
+
+    except Exception as e:
+        print(f"💥 Failed: {rel_path}\n   ↳ {type(e).__name__}: {e}")
+
+    finally:
+        if device == "cuda":
+            torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except AttributeError:
+                pass
+
+    return None
+
+
+def main():
+    load_dotenv(override=True)
+    try:
+        num         = os.environ["NUM"]
+        device      = os.environ["DEVICE"]
+        fps         = int(os.environ["FRAME_PER_SECOND"])
+        max_frames  = int(os.environ["FRAME_LIMIT"])
+        base_url    = os.environ["BASE_VIDEO_ENPOINT"]
+        batch_size = int(os.environ["BATCH_SIZE"])
+        timeout_limit = int(os.environ["TIMEOUT_LIMIT"])
+        watch_logs = os.environ["WANT_MEMORY_LOGS"].lower() == "true"
+    except KeyError as e:
+        print(f"❌ Missing environment variable: {e}")
+        sys.exit(1)
+
+    collection = f"feeds_clips_{num}"
+    json_path  = f"assets/{collection}.json"
+
     if not os.path.exists(json_path):
-        print(f"❌ JSON file not found: {json_path}")
-        return
+        print(f"❌ JSON not found: {json_path}")
+        sys.exit(1)
 
     with open(json_path, 'r', encoding='utf-8') as f:
         rel_paths = json.load(f)
 
     total = len(rel_paths)
-    print(f"📦 Total videos to process: {total}\n")
+    start = time.time()
+    total_batches = (total + batch_size - 1) // batch_size
+    for batch_start in range(0, total, batch_size):
+        batch_num = batch_start // batch_size + 1
+        batch = rel_paths[batch_start: batch_start + batch_size]
+        print(f"🔄 Batch [{batch_num}/{total_batches}]: {len(batch)} videos")
 
-    for i, rel in enumerate(rel_paths, start=1):
-        full_url = f"{base_url.rstrip('/')}/{rel.lstrip('/')}"
-        tmp_path = None
-        print(f"🔄 [{i}/{total}] Downloading → {rel}")
+        # Manually create ThreadPoolExecutor (no with-block!)
+        exe = ThreadPoolExecutor(max_workers=max(1, len(batch)))
+        futures = {
+            exe.submit(download_and_extract, rel, base_url, fps, max_frames, device): rel
+            for rel in batch
+        }
+
+        results = []
+        batch_timed_out = False  # Flag to track if timeout happened
 
         try:
-            tmp_path = download_video(full_url)
-            print(f"📥 [{i}/{total}] Downloaded")
+            # wait up to 45s for *all* futures
+            for fut in as_completed(futures, timeout=timeout_limit):
+                rel = futures[fut]
+                try:
+                    res = fut.result()
+                    if res is not None:
+                        results.append(res)
+                except Exception as e:
+                    print(f"💥 Skipped {rel}: {type(e).__name__}: {e}")
 
-            print(f"🧠 [{i}/{total}] Generating embedding")
-            process_file(
-                video_path=tmp_path,
-                collection_name=collection_name,
-                frame_per_second=frame_per_second,
-                max_frames=max_frames,
-                device=device,
-                url=full_url
-            )
-            print(f"✅ [{i}/{total}] Done: {rel}\n")
-
-        except Exception as e:
-            print(f"❌ [{i}/{total}] Failed: {rel}\n   → {e}\n")
+        except TimeoutError:
+            print(f"⏱️ Batch-timeout (45 s) — Skipping entire batch {batch_num}/{total_batches}")
+            batch_timed_out = True  # Set timeout flag
 
         finally:
-            if tmp_path and os.path.exists(tmp_path):
-                delete_video(tmp_path)
+            # Immediately shut down executor without waiting
+            exe.shutdown(wait=False, cancel_futures=True)
 
-if __name__ == "__main__":
-    start = time.time()
-    print("🚀 Job started\n")
-    json_name = "feeds_clips_" + num
+        if batch_timed_out:
+            continue  # Skip processing, immediately go to the next batch
 
-    process_from_json(
-        json_path="assets/" + json_name + ".json",
-        base_url=BASE_VIDEO_ENPOINT,
-        collection_name=json_name,
-        frame_per_second=int(fps),
-        max_frames=int(frame_limit),
-        device=device
-    )
+        # Check if there are no successful results
+        if not results:
+            print(f"⚠️  Batch [{batch_num}/{total_batches}] skipped — all videos failed.")
+            continue
+
+                   
+        # reorder to original batch order
+        results.sort(key=lambda x: batch.index(x[0]))
+        frames_list = [r[2] for r in results]
+
+        # one-shot embed
+        embeddings = embed_batch(frames_list, device)
+        
+        # buffer to Qdrant
+        for (rel, url, _), emb in zip(results, embeddings):
+            # print(f"✅ Embedded & buffering: {rel}")
+            buffer_point(collection, vector=emb.tolist(), payload={"fileurl": url})
+
+        # ── FREE FRAME TENSORS & FORCE GC ─────────────────────────────────
+        if device == "cuda":
+            for _, _, frames in results:
+                del frames
+            # Drop references to these collections
+            del results, frames_list, embeddings
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except AttributeError:
+                pass
+            if(watch_logs and batch_num%10 == 0):
+                log_gpu_mem()
+
+    print(f"\n📤 Flushing buffer to Qdrant: '{collection}'")
+    flush_buffer(collection)
+
+    elapsed = time.time() - start
+    m, s = divmod(elapsed, 60)
+    print(f"\n🏁 All done in {int(m)}m {int(s)}s")
+    os._exit(0)
     
-    total_time = time.time() - start
-    mins, secs = divmod(total_time, 60)
-    print(f"\n🎬 Video processing complete in {int(mins)} min {int(secs)} sec.")
-
-    # Start timing bulk upload
-    upload_start = time.time()
-    print(f"\n📤 Starting bulk upload to Qdrant for collection: '{json_name}'")
-    flush_buffer(json_name)
-    upload_time = time.time() - upload_start
-    upload_mins, upload_secs = divmod(upload_time, 60)
-    print(f"✅ Bulk upload complete in {int(upload_mins)} min {int(upload_secs)} sec.")
-
-    # Grand total
-    grand_total = time.time() - start
-    grand_mins, grand_secs = divmod(grand_total, 60)
-    print(f"\n🏁 Total job finished in {int(grand_mins)} min {int(grand_secs)} sec.\n")
+if __name__ == "__main__":
+    main()
