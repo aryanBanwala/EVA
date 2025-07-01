@@ -2,117 +2,75 @@ import os
 import sys
 import json
 import time
-import shutil
 from dotenv import load_dotenv
-from embeddings.video_embed import get_video_embedding
-from db.qdrant              import buffer_point, flush_buffer
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from embeddings.video_embed import extract_and_preprocess_frames, embed_batch
+from db.qdrant import buffer_point, flush_buffer
 from utils.videos_extractor import download_video, delete_video
 
+def download_and_extract(rel_path, base_url, fps, max_frames, device):
+    url = f"{base_url.rstrip('/')}/{rel_path.lstrip('/')}"
+    tmp = download_video(url)
+    frames = extract_and_preprocess_frames(tmp, fps, max_frames, device)
+    delete_video(tmp)
+    return rel_path, url, frames
 
-load_dotenv(override=True)
-try:
-    num = os.environ["NUM"]
-    device = os.environ["DEVICE"]
-    fps = os.environ["FRAME_PER_SECOND"]
-    frame_limit = os.environ["FRAME_LIMIT"]
-    BASE_VIDEO_ENPOINT = os.environ["BASE_VIDEO_ENPOINT"]
-except KeyError as e:
-    print(f"❌ Missing environment variable: {e}")
-    sys.exit(1)
+def main():
+    load_dotenv(override=True)
+    try:
+        num         = os.environ["NUM"]
+        device      = os.environ["DEVICE"]
+        fps         = int(os.environ["FRAME_PER_SECOND"])
+        max_frames  = int(os.environ["FRAME_LIMIT"])
+        base_url    = os.environ["BASE_VIDEO_ENPOINT"]
+        batch_size = int(os.environ["BATCH_SIZE"])
+    except KeyError as e:
+        print(f"❌ Missing environment variable: {e}")
+        sys.exit(1)
 
-def process_file(
-    video_path,
-    collection_name,
-    frame_per_second=1,
-    max_frames=30,
-    device='cpu',
-    url="default"
-):
-    embedding = get_video_embedding(
-        video_path=video_path,
-        frame_per_second=frame_per_second,
-        max_frames=max_frames,
-        device=device
-    )
-    buffer_point(
-        collection_name=collection_name,
-        vector=embedding.tolist(),
-        payload={"fileurl": url}
-    )
-    
+    collection = f"feeds_clips_{num}"
+    json_path  = f"assets/{collection}.json"
 
-def process_from_json(
-    json_path,
-    base_url,
-    collection_name,
-    frame_per_second=1,
-    max_frames=30,
-    device='cpu'
-):
     if not os.path.exists(json_path):
-        print(f"❌ JSON file not found: {json_path}")
-        return
+        print(f"❌ JSON not found: {json_path}")
+        sys.exit(1)
 
     with open(json_path, 'r', encoding='utf-8') as f:
         rel_paths = json.load(f)
 
-    total = len(rel_paths)
-    print(f"📦 Total videos to process: {total}\n")
+    total      = len(rel_paths)
+    start = time.time()
+    for batch_start in range(0, total, batch_size):
+        batch = rel_paths[batch_start: batch_start + batch_size]
+        print(f"🔄 Batch {batch_start//batch_size+1}: {len(batch)} videos")
 
-    for i, rel in enumerate(rel_paths, start=1):
-        full_url = f"{base_url.rstrip('/')}/{rel.lstrip('/')}"
-        tmp_path = None
-        print(f"🔄 [{i}/{total}] Downloading → {rel}")
+        # download & preprocess in parallel
+        with ThreadPoolExecutor(max_workers=len(batch)) as exe:
+            futures = [
+                exe.submit(download_and_extract, rel, base_url, fps, max_frames, device)
+                for rel in batch
+            ]
+            results = [f.result() for f in as_completed(futures)]
 
-        try:
-            tmp_path = download_video(full_url)
-            print(f"📥 [{i}/{total}] Downloaded")
+        # reorder to original batch order
+        results.sort(key=lambda x: batch.index(x[0]))
+        frames_list = [r[2] for r in results]
 
-            print(f"🧠 [{i}/{total}] Generating embedding")
-            process_file(
-                video_path=tmp_path,
-                collection_name=collection_name,
-                frame_per_second=frame_per_second,
-                max_frames=max_frames,
-                device=device,
-                url=full_url
-            )
-            print(f"✅ [{i}/{total}] Done: {rel}\n")
+        # one-shot embed
+        embeddings = embed_batch(frames_list, device)
 
-        except Exception as e:
-            print(f"❌ [{i}/{total}] Failed: {rel}\n   → {e}\n")
+        # buffer to Qdrant
+        for (rel, url, _), emb in zip(results, embeddings):
+            print(f"✅ Embedded & buffering: {rel}")
+            buffer_point(collection, vector=emb.tolist(), payload={"fileurl": url})
 
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                delete_video(tmp_path)
+    print(f"\n📤 Flushing buffer to Qdrant: '{collection}'")
+    flush_buffer(collection)
+
+    elapsed = time.time() - start
+    m, s = divmod(elapsed, 60)
+    print(f"\n🏁 All done in {int(m)}m {int(s)}s")
 
 if __name__ == "__main__":
-    start = time.time()
-    print("🚀 Job started\n")
-    json_name = "feeds_clips_" + num
-
-    process_from_json(
-        json_path="assets/" + json_name + ".json",
-        base_url=BASE_VIDEO_ENPOINT,
-        collection_name=json_name,
-        frame_per_second=int(fps),
-        max_frames=int(frame_limit),
-        device=device
-    )
-    
-    total_time = time.time() - start
-    mins, secs = divmod(total_time, 60)
-    print(f"\n🎬 Video processing complete in {int(mins)} min {int(secs)} sec.")
-
-    # Start timing bulk upload
-    upload_start = time.time()
-    print(f"\n📤 Starting bulk upload to Qdrant for collection: '{json_name}'")
-    flush_buffer(json_name)
-    upload_time = time.time() - upload_start
-    upload_mins, upload_secs = divmod(upload_time, 60)
-    print(f"✅ Bulk upload complete in {int(upload_mins)} min {int(upload_secs)} sec.")
-
-    # Grand total
-    grand_total = time.time() - start
-    grand_mins, grand_secs = divmod(grand_total, 60)
-    print(f"\n🏁 Total job finished in {int(grand_mins)} min {int(grand_secs)} sec.\n")
+    main()
