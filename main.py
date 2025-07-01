@@ -55,6 +55,7 @@ def main():
         max_frames  = int(os.environ["FRAME_LIMIT"])
         base_url    = os.environ["BASE_VIDEO_ENPOINT"]
         batch_size = int(os.environ["BATCH_SIZE"])
+        timeout_limit = int(os.environ["TIMEOUT_LIMIT"])
         watch_logs = os.environ["WANT_MEMORY_LOGS"].lower() == "true"
     except KeyError as e:
         print(f"❌ Missing environment variable: {e}")
@@ -90,7 +91,7 @@ def main():
 
         try:
             # wait up to 45s for *all* futures
-            for fut in as_completed(futures, timeout=45):
+            for fut in as_completed(futures, timeout=timeout_limit):
                 rel = futures[fut]
                 try:
                     res = fut.result()
