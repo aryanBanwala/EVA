@@ -106,7 +106,7 @@ def main():
 
         finally:
             # Immediately shut down executor without waiting
-            exe.shutdown(wait=False, cancel_futures=True)
+            exe.shutdown(wait=True, timeout=5)
 
         if batch_timed_out:
             continue  # Skip processing, immediately go to the next batch
@@ -151,6 +151,6 @@ def main():
     elapsed = time.time() - start
     m, s = divmod(elapsed, 60)
     print(f"\n🏁 All done in {int(m)}m {int(s)}s")
-
+    
 if __name__ == "__main__":
     main()
