@@ -106,7 +106,7 @@ def main():
 
         finally:
             # Immediately shut down executor without waiting
-            exe.shutdown(wait=True, timeout=5)
+            exe.shutdown(wait=False, cancel_futures=True)
 
         if batch_timed_out:
             continue  # Skip processing, immediately go to the next batch
