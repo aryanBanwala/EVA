@@ -17,7 +17,7 @@ _POINTS_BUFFER: dict[str, list[PointStruct]] = {}
 _BUFFER_LOCK    = threading.Lock()
 
 # flush threshold
-BUFFER_THRESHOLD = 3
+BUFFER_THRESHOLD = int(os.getenv("QDRANT_BUFFER_THRESHOLD"))
 
 def ensure_collection(collection_name, vector_dim: int):
     existing = {c.name for c in qdrant_client.get_collections().collections}
