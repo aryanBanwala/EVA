@@ -75,9 +75,13 @@ def main():
         embeddings = embed_batch(frames_list, device)
         
         # Log and clear GPU memory after each batch
-        log_gpu_mem(tag=f"After Batch {batch_start//batch_size + 1}")
         torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()
+        try:
+            torch.cuda.ipc_collect()
+        except AttributeError:
+            pass
+        log_gpu_mem(tag=f"After Batch {batch_start//batch_size + 1}")
+
         
         # buffer to Qdrant
         for (rel, url, _), emb in zip(results, embeddings):
