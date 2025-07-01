@@ -80,13 +80,27 @@ def main():
             torch.cuda.ipc_collect()
         except AttributeError:
             pass
-        log_gpu_mem(tag=f"After Batch {batch_start//batch_size + 1}")
 
         
         # buffer to Qdrant
         for (rel, url, _), emb in zip(results, embeddings):
             print(f"✅ Embedded & buffering: {rel}")
             buffer_point(collection, vector=emb.tolist(), payload={"fileurl": url})
+
+        log_gpu_mem(tag=f"After Batch {batch_start//batch_size + 1}")
+        # ── FREE FRAME TENSORS & FORCE GC ─────────────────────────────────
+        for _, _, frames in results:
+            del frames
+        # Drop references to these collections
+        del results, frames_list, embeddings
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except AttributeError:
+            pass
+        log_gpu_mem(tag=f"After Batch {batch_start//batch_size + 1}")
 
     print(f"\n📤 Flushing buffer to Qdrant: '{collection}'")
     flush_buffer(collection)
