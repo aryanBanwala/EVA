@@ -94,7 +94,7 @@ def main():
                 torch.cuda.ipc_collect()
             except AttributeError:
                 pass
-            if(os.environ["WANT_MEMORY_LOGS"] == "true"):
+            if(os.environ["WANT_MEMORY_LOGS"] == "true" and batch_num%10 == 0):
                 log_gpu_mem()
 
     print(f"\n📤 Flushing buffer to Qdrant: '{collection}'")
