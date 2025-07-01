@@ -75,20 +75,11 @@ def main():
         # one-shot embed
         embeddings = embed_batch(frames_list, device)
         
-        # Log and clear GPU memory after each batch
-        torch.cuda.empty_cache()
-        try:
-            torch.cuda.ipc_collect()
-        except AttributeError:
-            pass
-
-        
         # buffer to Qdrant
         for (rel, url, _), emb in zip(results, embeddings):
             # print(f"✅ Embedded & buffering: {rel}")
             buffer_point(collection, vector=emb.tolist(), payload={"fileurl": url})
 
-        log_gpu_mem(tag=f"After Batch {batch_start//batch_size + 1}")
         # ── FREE FRAME TENSORS & FORCE GC ─────────────────────────────────
         for _, _, frames in results:
             del frames
