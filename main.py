@@ -10,8 +10,6 @@ from embeddings.video_embed import extract_and_preprocess_frames, embed_batch
 from db.qdrant import buffer_point, flush_buffer
 from utils.videos_extractor import download_video, delete_video
 
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
-
 import torch
 import gc
 
