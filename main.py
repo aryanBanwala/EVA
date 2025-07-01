@@ -53,11 +53,13 @@ def main():
     with open(json_path, 'r', encoding='utf-8') as f:
         rel_paths = json.load(f)
 
-    total      = len(rel_paths)
+    total = len(rel_paths)
     start = time.time()
+    total_batches = (total + batch_size - 1) // batch_size
     for batch_start in range(0, total, batch_size):
+        batch_num = batch_start // batch_size + 1
         batch = rel_paths[batch_start: batch_start + batch_size]
-        print(f"🔄 Batch {batch_start//batch_size+1}: {len(batch)} videos")
+        print(f"🔄 Batch [{batch_num}/{total_batches}]: {len(batch)} videos")
 
         # download & preprocess in parallel
         with ThreadPoolExecutor(max_workers=len(batch)) as exe:
