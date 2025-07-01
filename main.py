@@ -39,6 +39,7 @@ def main():
         max_frames  = int(os.environ["FRAME_LIMIT"])
         base_url    = os.environ["BASE_VIDEO_ENPOINT"]
         batch_size = int(os.environ["BATCH_SIZE"])
+        watch_logs = os.environ["WANT_MEMORY_LOGS"].lower() == "true"
     except KeyError as e:
         print(f"❌ Missing environment variable: {e}")
         sys.exit(1)
@@ -94,7 +95,7 @@ def main():
                 torch.cuda.ipc_collect()
             except AttributeError:
                 pass
-            if(os.environ["WANT_MEMORY_LOGS"] == "true" and batch_num%10 == 0):
+            if(watch_logs and batch_num%10 == 0):
                 log_gpu_mem()
 
     print(f"\n📤 Flushing buffer to Qdrant: '{collection}'")
