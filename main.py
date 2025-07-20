@@ -8,6 +8,7 @@ from embeddings.video_embed import get_video_embedding
 from db.qdrant              import buffer_point, flush_buffer
 from utils.videos_extractor import download_video, delete_video
 
+from migration.qdrant_to_os import migrate_qdrant_to_opensearch
 
 load_dotenv(override=True)
 try:
@@ -86,7 +87,8 @@ def process_from_json(
             if tmp_path and os.path.exists(tmp_path):
                 delete_video(tmp_path)
 
-if __name__ == "__main__":
+def upload_process():
+    
     start = time.time()
     print("🚀 Job started\n")
     json_name = "feeds_clips_" + num
@@ -116,3 +118,8 @@ if __name__ == "__main__":
     grand_total = time.time() - start
     grand_mins, grand_secs = divmod(grand_total, 60)
     print(f"\n🏁 Total job finished in {int(grand_mins)} min {int(grand_secs)} sec.\n")
+    
+    
+if __name__ == "__main__":
+    migrate_qdrant_to_opensearch(1)
+    # upload_process()

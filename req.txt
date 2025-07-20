@@ -7,6 +7,7 @@ torch
 pillow
 moviepy
 torchvision
+opensearch-py
 opencv-python
 python-dotenv
 qdrant-client
