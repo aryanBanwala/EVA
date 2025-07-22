@@ -5,7 +5,9 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from collections import Counter
 from opensearchpy import OpenSearch
+from opensearchpy.helpers import bulk
 
+load_dotenv(override="true")
 
 # ——— Static config ———
 MONGO_URI       = "mongodb+srv://aryanRO:htPdaHYGX8Fto6DM@chatwise-production.eyezap.mongodb.net/"
@@ -26,6 +28,15 @@ es = OpenSearch(
     hosts=[{"host": ES_HOST, "port": ES_PORT}],
     use_ssl=False
 )
+
+# es = OpenSearch(
+#     hosts=[{
+#         "host": ES_HOST,       # e.g. "prod-elasticsearch.chat.internal.com"
+#         "scheme": "https"
+#     }],
+#     use_ssl=True,
+#     verify_certs=False        # set to True if you have CA-signed certs
+# )
 
 def make_feed_id(doc_id, created_at):
     date_str = datetime.utcfromtimestamp(created_at).strftime("%Y-%m-%d")
@@ -170,50 +181,73 @@ def validate_mapping(path):
             fid   = make_feed_id(str(doc["_id"]), ts)
             print(f"  • _id: {doc['_id']}, url: {url}, feed_id: {fid}")
         print()
-        
-def update_es_with_feed_id(mapping_path):
+
+def update_es_with_feed_id(mapping_path, chunk_size=500):
     """
-    For each entry in the mapping JSON, add a `feed_id` field
-    to the ES documents whose `fileURL` matches the full URL.
+    Batch-updates ES docs in ES_INDEX by adding `feed_id` based on
+    the mapping JSON.  Skips docs that already have the correct feed_id.
     """
+    # 1) load mapping JSON
     with open(mapping_path, "r") as f:
         data = json.load(f)
 
-    total = len(data)
-    print(f"\n🔧 Updating ES index '{ES_INDEX}' with feed_id (total {total})\n")
+    # 2) build lookup: full_url -> feed_id
+    lookup = {
+        BASE_VIDEO_ENDPOINT + entry["url"]: entry["feed_id"]
+        for entry in data
+        if entry.get("url") and entry.get("feed_id")
+    }
+    all_urls = list(lookup.keys())
+    total    = len(all_urls)
+    print(f"\n🔧 Batch-updating ES index '{ES_INDEX}' with feed_id (total {total})\n")
 
-    for i, entry in enumerate(data, start=1):
-        stripped = entry.get("url")
-        feed_id  = entry.get("feed_id")
-        if not stripped or not feed_id:
-            continue
+    # 3) process in chunks
+    for offset in range(0, total, chunk_size):
+        batch_urls = all_urls[offset : offset + chunk_size]
 
-        # Build the full URL exactly as it's in ES
-        full_url = BASE_VIDEO_ENDPOINT + stripped
-
-        # Update-by-query: set ctx._source.feed_id
-        body = {
-            "script": {
-                "source": "ctx._source.feed_id = params.feed_id",
-                "lang":   "painless",
-                "params": {"feed_id": feed_id}
-            },
+        # a) fetch fileurl + existing feed_id
+        search_body = {
+            "size": len(batch_urls),
+            "_source": ["fileurl", "feed_id"],
             "query": {
-                "term": {
-                    "fileurl.keyword": full_url
+                "terms": {
+                    "fileurl.keyword": batch_urls
                 }
             }
         }
+        resp = es.search(index=ES_INDEX, body=search_body)
+        hits = resp.get("hits", {}).get("hits", [])
 
-        resp = es.update_by_query(
-            index       = ES_INDEX,
-            body        = body,
-            refresh     = True,       # make change visible immediately
-            conflicts   = "proceed"   # skip any version conflicts
-        )
+        # b) build bulk update actions only for docs needing change
+        actions = []
+        for h in hits:
+            url        = h["_source"]["fileurl"]
+            existing   = h["_source"].get("feed_id")
+            expected   = lookup[url]
+            if existing == expected:
+                # already correct, skip
+                continue
 
-        updated = resp.get("updated", 0)
-        print(f"🔄 [{i}/{total}] `{stripped}` → updated {updated} doc(s)")
+            actions.append({
+                "_op_type": "update",
+                "_index":   ES_INDEX,
+                "_id":      h["_id"],
+                "doc":      {"feed_id": expected}
+            })
+
+        # c) execute bulk if there’s anything to do
+        if actions:
+            success, errors = bulk(
+                client=es,
+                actions=actions,
+                refresh=True,
+                raise_on_error=False
+            )
+        else:
+            success = 0
+
+        print(f"🔄 Batch {offset+1}-{min(offset+chunk_size, total)}: "
+              f"fetched={len(hits)}, updated={len(actions)} docs")
 
     print("\n✅ Done pushing feed_id into ES.")
 
@@ -299,4 +333,5 @@ def verify_es_data(mapping_path, chunk_size=500):
         for url, exp, act in mismatched_details:
             print(f"   - {url}\n       expected: {exp}\n       actual  : {act}")
 
-verify_es_data(OUTPUT_PATH)
+# verify_es_data(OUTPUT_PATH)
+update_es_with_feed_id(OUTPUT_PATH)
