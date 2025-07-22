@@ -6,6 +6,7 @@ regex
 torch
 pillow
 moviepy
+pymongo
 torchvision
 opensearch-py
 opencv-python
