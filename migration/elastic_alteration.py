@@ -17,6 +17,7 @@ FILE_LIST_PATH  = "assets/file_urls_for_mapping.json"
 OUTPUT_PATH     = "assets/feed_url_id_map.json"
 LOG_EVERY       = 100
 
+_ENV                 = os.getenv("_ENV", "local")
 ES_HOST              = os.getenv("OS_HOST", "localhost")
 ES_PORT              = int(os.getenv("OS_PORT", "9200"))
 ES_INDEX             = os.getenv("OS_INDEX", "test-vectors")
@@ -24,19 +25,21 @@ BASE_VIDEO_ENDPOINT  = os.getenv("BASE_VIDEO_ENPOINT",
                              "https://india-media-downlink-preprod.chatwise.co.uk/videos/crop/")
 
 # Init ES client
-es = OpenSearch(
-    hosts=[{"host": ES_HOST, "port": ES_PORT}],
-    use_ssl=False
-)
-
-# es = OpenSearch(
-#     hosts=[{
-#         "host": ES_HOST,       # e.g. "prod-elasticsearch.chat.internal.com"
-#         "scheme": "https"
-#     }],
-#     use_ssl=True,
-#     verify_certs=False        # set to True if you have CA-signed certs
-# )
+if _ENV == "local":
+    es = OpenSearch(
+        hosts=[{"host": ES_HOST, "port": ES_PORT}],
+        use_ssl=False
+    )
+elif _ENV == "pre-prod":
+    es = OpenSearch(
+        hosts=[{
+            "host": ES_HOST,
+            "port": 443,
+            "scheme": "https"
+        }],
+        use_ssl=True,
+        verify_certs=False  # Required because of SAN mismatch
+    )
 
 def make_feed_id(doc_id, created_at):
     date_str = datetime.utcfromtimestamp(created_at).strftime("%Y-%m-%d")
@@ -253,13 +256,13 @@ def update_es_with_feed_id(mapping_path, chunk_size=500):
 
 def verify_es_data(mapping_path, chunk_size=500):
     """
-    1️⃣  Load the mapping JSON.  
-    2️⃣  Fetch docs from OpenSearch in bulk (chunked *terms* query on `fileurl.keyword`).  
-    3️⃣  Check that each doc exists **and** carries the expected `feed_id`.  
-    4️⃣  Print a concise summary with mismatches & misses.
+      Load the mapping JSON.
+      Fetch docs from OpenSearch in bulk (chunked *terms* query on `fileurl.keyword`).
+      Check that each doc exists **and** carries the expected `feed_id`.
+      Print a concise summary with mismatches & misses.
 
-    ‼️  Requires the global `es`, `BASE_VIDEO_ENDPOINT`, and `ES_INDEX`
-        already defined above.
+      Requires the global `es`, `BASE_VIDEO_ENDPOINT`, and `ES_INDEX`
+      already defined above.
     """
     # -- Load mapping -----------------------------------------------------
     with open(mapping_path, "r") as f:
@@ -334,4 +337,4 @@ def verify_es_data(mapping_path, chunk_size=500):
             print(f"   - {url}\n       expected: {exp}\n       actual  : {act}")
 
 # verify_es_data(OUTPUT_PATH)
-update_es_with_feed_id(OUTPUT_PATH)
+#update_es_with_feed_id(OUTPUT_PATH)
