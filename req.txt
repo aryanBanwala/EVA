@@ -3,10 +3,12 @@ ftfy
 tqdm
 numpy
 regex
+motor
 torch
 decord
 pillow
 moviepy
+pymongo
 torchvision
 opencv-python
 python-dotenv
