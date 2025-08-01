@@ -5,6 +5,7 @@ numpy
 regex
 motor
 torch
+boto3
 decord
 pillow
 moviepy

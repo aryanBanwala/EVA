@@ -2,29 +2,50 @@
 import tempfile
 import requests
 import os
+import boto3
 
-def download_video(url: str) -> str:
+S3_BUCKET = "jigrr-media-prod"
+
+def download_video(key: str) -> str:
     """
-    Downloads a video from the given URL into ./temp/ folder as a .mp4 file.
+    Downloads a video from S3 into ./temp/ folder as a .mp4 file.
     Returns the local file path.
     """
+    s3 = boto3.client('s3')
+
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     TEMP_DIR = os.path.join(BASE_DIR, "temp")
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    filename = os.path.basename(url)
+    filename = os.path.basename(key)
     file_path = os.path.join(TEMP_DIR, filename)
 
-
-    resp = requests.get(url, stream=True)
-    resp.raise_for_status()
-
-    with open(file_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=8192):
-            f.write(chunk)
+    with open(file_path, 'wb') as f:
+        s3.download_fileobj(S3_BUCKET, key, f)
 
     return file_path
 
+# def download_video(url: str) -> str:
+#     """
+#     Downloads a video from the given URL into ./temp/ folder as a .mp4 file.
+#     Returns the local file path.
+#     """
+#     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+#     TEMP_DIR = os.path.join(BASE_DIR, "temp")
+#     os.makedirs(TEMP_DIR, exist_ok=True)
+
+#     filename = os.path.basename(url)
+#     file_path = os.path.join(TEMP_DIR, filename)
+
+
+#     resp = requests.get(url, stream=True)
+#     resp.raise_for_status()
+
+#     with open(file_path, "wb") as f:
+#         for chunk in resp.iter_content(chunk_size=8192):
+#             f.write(chunk)
+
+#     return file_path
 
 def delete_video(path: str) -> None:
     """
