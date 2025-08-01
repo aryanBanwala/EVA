@@ -42,7 +42,6 @@ base_url      = os.getenv("BASE_VIDEO_ENDPOINT", "")
 timeout_limit = int(os.getenv("TIMEOUT_LIMIT", "45"))
 watch_logs    = os.getenv("WANT_MEMORY_LOGS", "false").lower() == "true"
 
-
 # ============  Small utilities  ==============================================
 def log_gpu_mem(tag=""):
     gc.collect()
