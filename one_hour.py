@@ -229,6 +229,9 @@ async def main_process():
         except Exception as e:
             time.sleep(5)
 
+async def start():
+    await test_connections()
+    await main_process()
+
 if __name__ == "__main__":
-    asyncio.run(test_connections())
-    asyncio.run(main_process())
+    asyncio.run(start())
