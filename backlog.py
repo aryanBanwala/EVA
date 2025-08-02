@@ -61,7 +61,7 @@ def download_and_extract(suffix_url, base_url, fps, max_frames, device):
     Worker fn executed in ThreadPool threads: blocking I/O + CPU decode.
     Returns (rel_path, full_url, frames_tensor) or None on failure.
     """
-    url = base_url+suffix_url
+    url = suffix_url
     try:
         tmp = download_video(url)
         frames = extract_and_preprocess_frames(tmp, fps, max_frames, device)

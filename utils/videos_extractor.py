@@ -4,7 +4,7 @@ import requests
 import os
 import boto3
 
-S3_BUCKET = "jigrr-media-prod"
+S3_BUCKET = "prod-cw-media"
 
 def download_video(key: str) -> str:
     """
