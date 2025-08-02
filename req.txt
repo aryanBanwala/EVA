@@ -12,6 +12,7 @@ moviepy
 pymongo
 torchvision
 opencv-python
+opensearch-py
 python-dotenv
 qdrant-client
 git+https://github.com/mlfoundations/open_clip.git@main#egg=open-clip-torch
