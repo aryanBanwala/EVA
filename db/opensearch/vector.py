@@ -15,8 +15,8 @@ if ENV == "prod":
     client = OpenSearch(
         hosts=[{"host": OS_HOST, "port": OS_PORT}],
         http_compress=True,
-        use_ssl=True,
-        verify_certs=True,
+        use_ssl=False,
+        verify_certs=False,
         connection_class=RequestsHttpConnection,
     )
 
