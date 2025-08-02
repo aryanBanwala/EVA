@@ -47,3 +47,24 @@ def bulk_push_vector_docs(docs):
     success, failed = helpers.bulk(client, actions, stats_only=True)
     print(f"✅ Bulk push completed: {success} success, {failed} failed\n")
     print("-------------------------------------------------------------")
+    
+def test_opensearch_connection():
+    try:
+        # Ping the cluster
+        if not client.ping():
+            print("❌ Failed to connect to OpenSearch cluster.")
+            return
+
+        # Get basic info
+        info = client.info()
+        print("✅ Connected to OpenSearch")
+        print(f"🧠 Cluster: {info['cluster_name']} | Version: {info['version']['number']}")
+
+        # Optional: Check if the target index exists
+        if client.indices.exists(index=OS_INDEX):
+            print(f"📦 Index '{OS_INDEX}' exists.")
+        else:
+            print(f"⚠️ Index '{OS_INDEX}' does not exist.")
+
+    except Exception as e:
+        print(f"🔥 Connection test failed: {e}")
