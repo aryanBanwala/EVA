@@ -48,7 +48,7 @@ def bulk_push_vector_docs(docs):
     print(f"✅ Bulk push completed: {success} success, {failed} failed\n")
     print("-------------------------------------------------------------")
     
-def test_opensearch_connection():
+async def test_opensearch_connection():
     try:
         # Ping the cluster
         if not client.ping():

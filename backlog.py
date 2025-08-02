@@ -210,9 +210,9 @@ async def main():
 
 # ============  Entry-point ====================================================
 
-def test_connections():
-    init_connection()
-    test_opensearch_connection()
+async def test_connections():
+    await init_connection()
+    await test_opensearch_connection()
 
 async def main_process():
     while True:
@@ -221,7 +221,6 @@ async def main_process():
         except Exception as e:
             time.sleep(5)
 
-
 if __name__ == "__main__":
-    test_connections()
+    asyncio.run(test_connections())
     asyncio.run(main_process())

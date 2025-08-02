@@ -26,7 +26,7 @@ from db.mongo.feeds import (
     update_vector_model_status
 )
 from utils.videos_extractor import download_video, delete_video
-from db.opensearch.vector import bulk_push_vector_docs
+from db.opensearch.vector import bulk_push_vector_docs, test_opensearch_connection
 # ──────────────────────────────────────────────────────────────────────────────
 
 load_dotenv(override=True)
@@ -218,6 +218,10 @@ async def main():
 
 # ============  Entry-point ====================================================
 
+async def test_connections():
+    await init_connection()
+    await test_opensearch_connection()
+
 async def main_process():
     while True:
         try:
@@ -226,4 +230,5 @@ async def main_process():
             time.sleep(5)
 
 if __name__ == "__main__":
+    asyncio.run(test_connections())
     asyncio.run(main_process())
